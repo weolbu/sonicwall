@@ -137,7 +137,23 @@ echo -e "  ${CYAN}[scutil --dns 주요 항목]${NC}"
 scutil --dns 2>/dev/null | grep -A5 "resolver" | head -40 | sed 's/^/  /'
 
 # --------------------------------------------------
-print_header "5단계: 특정 서버 연결 테스트"
+print_header "5단계: 프로세스 및 네트워크 상태"
+# --------------------------------------------------
+
+echo -e "\n  ${CYAN}[CSE 관련 프로세스]${NC}"
+ps aux 2>/dev/null | grep -iE "banyan|sonicwall|wireguard" | grep -v grep | sed 's/^/  /' || warn "CSE 관련 프로세스 없음"
+
+echo -e "\n  ${CYAN}[라우팅 테이블]${NC}"
+netstat -rn 2>/dev/null | head -40 | sed 's/^/  /'
+
+echo -e "\n  ${CYAN}[CSE 로컬 DNS 리졸버(127.0.0.5) 연결 상태]${NC}"
+netstat -an 2>/dev/null | grep "127.0.0.5" | sed 's/^/  /' || warn "127.0.0.5 관련 연결 없음"
+
+echo -e "\n  ${CYAN}[포트 리스닝 상태 (banyan/wireguard 관련)]${NC}"
+lsof -iTCP -iUDP 2>/dev/null | grep -iE "banyan|wireguard|wg|utun" | sed 's/^/  /' || warn "관련 리스닝 포트 없음"
+
+# --------------------------------------------------
+print_header "6단계: 특정 서버 연결 테스트"
 # --------------------------------------------------
 if [[ -n "$TARGET_HOST" ]]; then
     echo ""
@@ -148,14 +164,35 @@ if [[ -n "$TARGET_HOST" ]]; then
         fail "Ping 실패"
     fi
 
+    # DNS 조회 (host)
     echo ""
-    echo -e "  ${CYAN}[DNS 조회: $TARGET_HOST]${NC}"
-    if nslookup "$TARGET_HOST" 2>/dev/null; then
-        pass "DNS 조회 성공"
+    echo -e "  ${CYAN}[DNS 조회 - host: $TARGET_HOST]${NC}"
+    if host "$TARGET_HOST" 2>/dev/null; then
+        pass "host 조회 성공"
     else
-        fail "DNS 조회 실패 - DNS 설정을 확인하세요"
+        fail "host 조회 실패"
     fi
 
+    # DNS 조회 (nslookup)
+    echo ""
+    echo -e "  ${CYAN}[DNS 조회 - nslookup: $TARGET_HOST]${NC}"
+    if nslookup "$TARGET_HOST" 2>/dev/null; then
+        pass "nslookup 조회 성공"
+    else
+        fail "nslookup 조회 실패"
+    fi
+
+    # DNS 조회 (dig)
+    echo ""
+    echo -e "  ${CYAN}[DNS 조회 - dig: $TARGET_HOST]${NC}"
+    dig "$TARGET_HOST" 2>/dev/null | sed 's/^/  /' || fail "dig 조회 실패"
+
+    # CSE 로컬 DNS 리졸버 직접 조회
+    echo ""
+    echo -e "  ${CYAN}[DNS 조회 - dig @127.0.0.5 (CSE 로컬 리졸버): $TARGET_HOST]${NC}"
+    dig @127.0.0.5 "$TARGET_HOST" 2>/dev/null | sed 's/^/  /' || fail "CSE 로컬 DNS 리졸버 조회 실패"
+
+    # TCP 포트 테스트
     if [[ -n "$TARGET_PORT" ]]; then
         echo ""
         echo -e "  ${CYAN}[TCP 포트 테스트: $TARGET_HOST:$TARGET_PORT]${NC}"
@@ -165,9 +202,32 @@ if [[ -n "$TARGET_HOST" ]]; then
             fail "포트 $TARGET_PORT 연결 실패"
         fi
     fi
+
+    # HTTP 연결 테스트
+    echo ""
+    echo -e "  ${CYAN}[HTTP 연결 테스트: http://$TARGET_HOST]${NC}"
+    curl -v --connect-timeout 5 "http://$TARGET_HOST" 2>&1 | tail -20 | sed 's/^/  /' || true
+
+    echo ""
+    echo -e "  ${CYAN}[HTTPS 연결 테스트: https://$TARGET_HOST]${NC}"
+    curl -v --connect-timeout 5 "https://$TARGET_HOST" 2>&1 | tail -20 | sed 's/^/  /' || true
+
+    echo ""
+    echo -e "  ${CYAN}[HTTPS 응답 요약: https://$TARGET_HOST]${NC}"
+    CURL_RESULT=$(curl -s --connect-timeout 10 -o /dev/null -w "HTTP %{http_code} | connect: %{time_connect}s | total: %{time_total}s" "https://$TARGET_HOST" 2>/dev/null || true)
+    if [[ -n "$CURL_RESULT" ]]; then
+        echo -e "  $CURL_RESULT"
+        if echo "$CURL_RESULT" | grep -q "HTTP 0"; then
+            fail "HTTPS 연결 실패 (타임아웃 또는 연결 불가)"
+        else
+            pass "HTTPS 응답 수신"
+        fi
+    else
+        fail "curl 실행 실패"
+    fi
 else
     echo "  인자 없음 - 서버 테스트 건너뛰기"
-    echo "  사용법: curl -sL <URL> | sudo bash -s -- <서버IP> [포트]"
+    echo "  사용법: curl -sL <URL> | sudo bash -s -- <서버IP또는도메인> [포트]"
 fi
 
 # --------------------------------------------------

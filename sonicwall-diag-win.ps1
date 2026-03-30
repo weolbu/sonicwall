@@ -140,8 +140,9 @@ if ([string]::IsNullOrWhiteSpace($wgOutput)) {
 }
 
 # --------------------------------------------------
-Print-Header "4단계: DNS NRPT 규칙 확인"
+Print-Header "4단계: DNS 설정 확인"
 # --------------------------------------------------
+
 Write-Host "  [NRPT 규칙 목록]" -ForegroundColor Cyan
 try {
     $nrpt = Get-DnsClientNrptRule 2>$null
@@ -156,8 +157,69 @@ try {
     Warn "NRPT 규칙 조회 실패: $_"
 }
 
+Write-Host ""
+Write-Host "  [ipconfig /all - DNS 서버 설정]" -ForegroundColor Cyan
+try {
+    $ipconfig = ipconfig /all 2>&1 | Out-String
+    $ipconfig -split "`n" | Where-Object { $_ -match "DNS|IPv4|어댑터|Adapter|Description" } |
+        ForEach-Object { Write-Host "  $($_.Trim())" }
+} catch {
+    Warn "ipconfig 실행 실패"
+}
+
 # --------------------------------------------------
-Print-Header "5단계: 특정 서버 연결 테스트"
+Print-Header "5단계: 프로세스 및 네트워크 상태"
+# --------------------------------------------------
+
+Write-Host "  [CSE 관련 프로세스]" -ForegroundColor Cyan
+try {
+    $procs = Get-Process 2>$null | Where-Object { $_.ProcessName -match "banyan|sonicwall|wireguard" }
+    if ($procs) {
+        $procs | Format-Table -Property Id, ProcessName, CPU, WorkingSet -AutoSize |
+            Out-String | ForEach-Object { $_ -split "`n" } |
+            ForEach-Object { Write-Host "  $_" }
+    } else {
+        Warn "CSE 관련 프로세스 없음"
+    }
+} catch {
+    Warn "프로세스 조회 실패"
+}
+
+Write-Host ""
+Write-Host "  [라우팅 테이블 (주요 항목)]" -ForegroundColor Cyan
+try {
+    $routes = netstat -rn 2>&1 | Out-String
+    $routes -split "`n" | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+} catch {
+    Warn "라우팅 테이블 조회 실패"
+}
+
+Write-Host ""
+Write-Host "  [CSE 로컬 DNS 리졸버(127.0.0.5) 연결 상태]" -ForegroundColor Cyan
+try {
+    $dnsConn = netstat -an 2>&1 | Out-String
+    $matched = $dnsConn -split "`n" | Where-Object { $_ -match "127\.0\.0\.5" }
+    if ($matched) {
+        $matched | ForEach-Object { Write-Host "  $($_.Trim())" }
+    } else {
+        Warn "127.0.0.5 관련 연결 없음"
+    }
+} catch {
+    Warn "netstat 실행 실패"
+}
+
+Write-Host ""
+Write-Host "  [포트 리스닝 상태 (전체)]" -ForegroundColor Cyan
+try {
+    $listening = netstat -ano 2>&1 | Out-String
+    $listening -split "`n" | Where-Object { $_ -match "LISTENING" } |
+        Select-Object -First 30 | ForEach-Object { Write-Host "  $($_.Trim())" }
+} catch {
+    Warn "리스닝 포트 조회 실패"
+}
+
+# --------------------------------------------------
+Print-Header "6단계: 특정 서버 연결 테스트"
 # --------------------------------------------------
 if (![string]::IsNullOrWhiteSpace($TargetHost)) {
     Write-Host ""
@@ -169,8 +231,20 @@ if (![string]::IsNullOrWhiteSpace($TargetHost)) {
         Fail "Ping 실패"
     }
 
+    # DNS 조회 (nslookup)
     Write-Host ""
-    Write-Host "  [DNS 조회: $TargetHost]" -ForegroundColor Cyan
+    Write-Host "  [DNS 조회 - nslookup: $TargetHost]" -ForegroundColor Cyan
+    try {
+        $nslookup = nslookup $TargetHost 2>&1 | Out-String
+        $nslookup -split "`n" | ForEach-Object { Write-Host "  $_" }
+        Pass "nslookup 조회 완료"
+    } catch {
+        Fail "nslookup 조회 실패"
+    }
+
+    # DNS 조회 (Resolve-DnsName)
+    Write-Host ""
+    Write-Host "  [DNS 조회 - Resolve-DnsName: $TargetHost]" -ForegroundColor Cyan
     try {
         $dns = Resolve-DnsName -Name $TargetHost -ErrorAction Stop
         Pass "DNS 조회 성공"
@@ -181,7 +255,9 @@ if (![string]::IsNullOrWhiteSpace($TargetHost)) {
         Fail "DNS 조회 실패 - DNS 설정을 확인하세요"
     }
 
+    # TCP 포트 테스트
     if (![string]::IsNullOrWhiteSpace($TargetPort)) {
+        Write-Host ""
         Write-Host "  [TCP 포트 테스트: ${TargetHost}:${TargetPort}]" -ForegroundColor Cyan
         $tcp = New-Object System.Net.Sockets.TcpClient
         try {
@@ -198,9 +274,43 @@ if (![string]::IsNullOrWhiteSpace($TargetHost)) {
             $tcp.Close()
         }
     }
+
+    # HTTP 연결 테스트
+    Write-Host ""
+    Write-Host "  [HTTP 연결 테스트: http://$TargetHost]" -ForegroundColor Cyan
+    try {
+        $httpResult = curl.exe -v --connect-timeout 5 "http://$TargetHost" 2>&1 | Out-String
+        $httpResult -split "`n" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
+    } catch {
+        Fail "HTTP 연결 실패"
+    }
+
+    Write-Host ""
+    Write-Host "  [HTTPS 연결 테스트: https://$TargetHost]" -ForegroundColor Cyan
+    try {
+        $httpsResult = curl.exe -v --connect-timeout 5 "https://$TargetHost" 2>&1 | Out-String
+        $httpsResult -split "`n" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
+    } catch {
+        Fail "HTTPS 연결 실패"
+    }
+
+    Write-Host ""
+    Write-Host "  [HTTPS 응답 요약: https://$TargetHost]" -ForegroundColor Cyan
+    try {
+        $curlSummary = curl.exe -s --connect-timeout 10 -o NUL -w "%{http_code} %{time_connect} %{time_total}" "https://$TargetHost" 2>&1 | Out-String
+        $curlSummary = $curlSummary.Trim()
+        Write-Host "  HTTP $curlSummary"
+        if ($curlSummary -match "^0") {
+            Fail "HTTPS 연결 실패 (타임아웃 또는 연결 불가)"
+        } else {
+            Pass "HTTPS 응답 수신"
+        }
+    } catch {
+        Fail "curl 실행 실패"
+    }
 } else {
     Write-Host "  인자 없음 - 서버 테스트 건너뛰기"
-    Write-Host "  사용법: .\sonicwall-diag-win.ps1 <서버IP> [포트]"
+    Write-Host "  사용법: .\sonicwall-diag-win.ps1 <서버IP또는도메인> [포트]"
 }
 
 # --------------------------------------------------

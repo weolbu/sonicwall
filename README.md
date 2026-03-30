@@ -23,16 +23,11 @@ SonicWall CSE(Cloud Secure Edge) 환경에서 Service Tunnel이 동작하지 않
 # 기본 진단
 curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash
 
-# 특정 서버 연결 테스트
-curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- <서버IP>
+# 특정 서버 연결 테스트 (도메인 또는 IP)
+curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- admin.weolbu.com
 
 # 서버 + 포트 테스트
-curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- <서버IP> <포트>
-```
-
-**예시:**
-```bash
-curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- 10.50.1.100 3306
+curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- admin.weolbu.com 443
 ```
 
 ### Windows (관리자 PowerShell)
@@ -42,15 +37,10 @@ curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-
 irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1 | iex
 
 # 특정 서버 연결 테스트
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "서버IP"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "admin.weolbu.com"
 
 # 서버 + 포트 테스트
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "서버IP" "포트"
-```
-
-**예시:**
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "10.50.1.100" "3306"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "admin.weolbu.com" "443"
 ```
 
 > Windows에서 실행 정책 오류가 나면 먼저 `Set-ExecutionPolicy Bypass -Scope Process -Force` 를 실행하세요.
@@ -59,13 +49,40 @@ irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.p
 
 ## 진단 항목
 
-| 단계 | 내용 | 확인 기준 |
-|------|------|-----------|
+| 단계 | 내용 | 세부 |
+|------|------|------|
 | 1 | CSE 앱 설치 확인 | WireGuard 바이너리 존재 여부 |
 | 2 | WireGuard 서비스 상태 | 실행 중이 아니면 자동 재시작 시도 |
 | 3 | 터널 연결 상태 | peer 존재, handshake 180초 이내, transfer 증가 |
-| 4 | DNS 설정 | 내부 도메인이 올바른 DNS로 해석되는지 |
-| 5 | 서버 연결 테스트 | ping, DNS 조회, TCP 포트 연결 |
+| 4 | DNS 설정 | scutil --dns (macOS) / NRPT 규칙 + ipconfig (Windows) |
+| 5 | 프로세스 및 네트워크 상태 | CSE 프로세스, 라우팅 테이블, 127.0.0.5 리졸버, 리스닝 포트 |
+| 6 | 서버 연결 테스트 | ping, DNS 조회 (host/nslookup/dig), HTTP/HTTPS curl, TCP 포트 |
+
+### 6단계 서버 테스트 상세 (인자 입력 시)
+
+**macOS:**
+| 검사 | 명령 |
+|------|------|
+| Ping | `ping -c 3` |
+| DNS (host) | `host <도메인>` |
+| DNS (nslookup) | `nslookup <도메인>` |
+| DNS (dig) | `dig <도메인>` |
+| DNS (CSE 리졸버) | `dig @127.0.0.5 <도메인>` |
+| TCP 포트 | `nc -z -w 5 <호스트> <포트>` |
+| HTTP 연결 | `curl -v --connect-timeout 5 http://<호스트>` |
+| HTTPS 연결 | `curl -v --connect-timeout 5 https://<호스트>` |
+| HTTPS 응답 요약 | HTTP 상태코드, connect 시간, total 시간 |
+
+**Windows:**
+| 검사 | 명령 |
+|------|------|
+| Ping | `Test-Connection -Count 3` |
+| DNS (nslookup) | `nslookup <도메인>` |
+| DNS (Resolve-DnsName) | `Resolve-DnsName <도메인>` |
+| TCP 포트 | `TcpClient.BeginConnect` (5초 타임아웃) |
+| HTTP 연결 | `curl.exe -v --connect-timeout 5 http://<호스트>` |
+| HTTPS 연결 | `curl.exe -v --connect-timeout 5 https://<호스트>` |
+| HTTPS 응답 요약 | HTTP 상태코드, connect 시간, total 시간 |
 
 ---
 
@@ -83,7 +100,13 @@ irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.p
 - 포함되어 있지 않다면 CSE 관리자에게 해당 IP/CIDR을 터널 정책에 추가 요청해야 합니다.
 
 ### DNS 조회 실패
-- CSE 터널 DNS 설정에서 해당 도메인이 누락되었을 수 있습니다. 관리자에게 문의하세요.
+- `dig @127.0.0.5`가 실패하면 CSE 로컬 DNS 리졸버 자체에 문제가 있습니다.
+- `dig`은 되지만 `dig @127.0.0.5`가 실패하면 CSE 터널 DNS 설정에서 해당 도메인이 누락된 것입니다.
+- 관리자에게 문의하세요.
+
+### HTTP/HTTPS 연결 실패
+- DNS는 성공하지만 curl이 실패하면 방화벽 또는 라우팅 문제입니다.
+- 라우팅 테이블에서 해당 IP 대역의 경로를 확인하세요.
 
 ---
 
