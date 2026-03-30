@@ -20,27 +20,27 @@ SonicWall CSE(Cloud Secure Edge) 환경에서 Service Tunnel이 동작하지 않
 ### macOS
 
 ```bash
-# 기본 진단
+# 기본 진단 (weolbu.com, admin.weolbu.com, redash.weolbu.com 자동 테스트)
 curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash
 
-# 특정 서버 연결 테스트 (도메인 또는 IP)
-curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- admin.weolbu.com
+# 기본 도메인 + 추가 서버 테스트
+curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- 10.50.1.100
 
-# 서버 + 포트 테스트
-curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- admin.weolbu.com 443
+# 기본 도메인 + 추가 서버:포트 테스트
+curl -sL https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-mac.sh | sudo bash -s -- 10.50.1.100 3306
 ```
 
 ### Windows (관리자 PowerShell)
 
 ```powershell
-# 기본 진단
+# 기본 진단 (weolbu.com, admin.weolbu.com, redash.weolbu.com 자동 테스트)
 irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1 | iex
 
-# 특정 서버 연결 테스트
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "admin.weolbu.com"
+# 기본 도메인 + 추가 서버 테스트
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "10.50.1.100"
 
-# 서버 + 포트 테스트
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "admin.weolbu.com" "443"
+# 기본 도메인 + 추가 서버:포트 테스트
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.ps1))) "10.50.1.100" "3306"
 ```
 
 > Windows에서 실행 정책 오류가 나면 먼저 `Set-ExecutionPolicy Bypass -Scope Process -Force` 를 실행하세요.
@@ -56,7 +56,9 @@ irm https://raw.githubusercontent.com/weolbu/sonicwall/main/sonicwall-diag-win.p
 | 3 | 터널 연결 상태 | peer 존재, handshake 180초 이내, transfer 증가 |
 | 4 | DNS 설정 | scutil --dns (macOS) / NRPT 규칙 + ipconfig (Windows) |
 | 5 | 프로세스 및 네트워크 상태 | CSE 프로세스, 라우팅 테이블, 127.0.0.5 리졸버, 리스닝 포트 |
-| 6 | 서버 연결 테스트 | ping, DNS 조회 (host/nslookup/dig), HTTP/HTTPS curl, TCP 포트 |
+| 6 | 서버 연결 테스트 | 기본 3개 도메인 + 추가 서버: ping, DNS, HTTP/HTTPS, TCP 포트 |
+
+기본 테스트 도메인: `weolbu.com`, `admin.weolbu.com`, `redash.weolbu.com`
 
 ### 6단계 서버 테스트 상세 (인자 입력 시)
 

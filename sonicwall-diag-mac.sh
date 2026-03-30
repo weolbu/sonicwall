@@ -2,14 +2,15 @@
 # SonicWall CSE Service Tunnel - macOS Diagnostic & Fix Script
 #
 # Usage:
-#   curl -sL <URL> | sudo bash                          # 기본 진단만
-#   curl -sL <URL> | sudo bash -s -- 10.0.1.50          # 특정 서버 테스트
-#   curl -sL <URL> | sudo bash -s -- 10.0.1.50 8080     # 서버 + 포트 테스트
+#   curl -sL <URL> | sudo bash                          # 기본 도메인 진단
+#   curl -sL <URL> | sudo bash -s -- 10.0.1.50          # 기본 + 추가 서버 테스트
+#   curl -sL <URL> | sudo bash -s -- 10.0.1.50 8080     # 기본 + 추가 서버:포트 테스트
 
 set -euo pipefail
 
-TARGET_HOST="${1:-}"
-TARGET_PORT="${2:-}"
+DEFAULT_HOSTS=("weolbu.com" "admin.weolbu.com" "redash.weolbu.com")
+EXTRA_HOST="${1:-}"
+EXTRA_PORT="${2:-}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -153,12 +154,20 @@ echo -e "\n  ${CYAN}[포트 리스닝 상태 (banyan/wireguard 관련)]${NC}"
 lsof -iTCP -iUDP 2>/dev/null | grep -iE "banyan|wireguard|wg|utun" | sed 's/^/  /' || warn "관련 리스닝 포트 없음"
 
 # --------------------------------------------------
-print_header "6단계: 특정 서버 연결 테스트"
+# 서버 테스트 함수
 # --------------------------------------------------
-if [[ -n "$TARGET_HOST" ]]; then
+test_server() {
+    local HOST="$1"
+    local PORT="${2:-}"
+
+    echo -e "\n${CYAN}  ────────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}대상: ${HOST}${PORT:+ :$PORT}${NC}"
+    echo -e "${CYAN}  ────────────────────────────────────────${NC}"
+
+    # Ping
     echo ""
-    echo -e "  ${CYAN}[Ping 테스트: $TARGET_HOST]${NC}"
-    if ping -c 3 -W 3 "$TARGET_HOST" 2>/dev/null; then
+    echo -e "  ${CYAN}[Ping: $HOST]${NC}"
+    if ping -c 3 -W 3 "$HOST" 2>/dev/null; then
         pass "Ping 성공"
     else
         fail "Ping 실패"
@@ -166,8 +175,8 @@ if [[ -n "$TARGET_HOST" ]]; then
 
     # DNS 조회 (host)
     echo ""
-    echo -e "  ${CYAN}[DNS 조회 - host: $TARGET_HOST]${NC}"
-    if host "$TARGET_HOST" 2>/dev/null; then
+    echo -e "  ${CYAN}[DNS - host: $HOST]${NC}"
+    if host "$HOST" 2>/dev/null; then
         pass "host 조회 성공"
     else
         fail "host 조회 실패"
@@ -175,8 +184,8 @@ if [[ -n "$TARGET_HOST" ]]; then
 
     # DNS 조회 (nslookup)
     echo ""
-    echo -e "  ${CYAN}[DNS 조회 - nslookup: $TARGET_HOST]${NC}"
-    if nslookup "$TARGET_HOST" 2>/dev/null; then
+    echo -e "  ${CYAN}[DNS - nslookup: $HOST]${NC}"
+    if nslookup "$HOST" 2>/dev/null; then
         pass "nslookup 조회 성공"
     else
         fail "nslookup 조회 실패"
@@ -184,37 +193,37 @@ if [[ -n "$TARGET_HOST" ]]; then
 
     # DNS 조회 (dig)
     echo ""
-    echo -e "  ${CYAN}[DNS 조회 - dig: $TARGET_HOST]${NC}"
-    dig "$TARGET_HOST" 2>/dev/null | sed 's/^/  /' || fail "dig 조회 실패"
+    echo -e "  ${CYAN}[DNS - dig: $HOST]${NC}"
+    dig "$HOST" 2>/dev/null | sed 's/^/  /' || fail "dig 조회 실패"
 
     # CSE 로컬 DNS 리졸버 직접 조회
     echo ""
-    echo -e "  ${CYAN}[DNS 조회 - dig @127.0.0.5 (CSE 로컬 리졸버): $TARGET_HOST]${NC}"
-    dig @127.0.0.5 "$TARGET_HOST" 2>/dev/null | sed 's/^/  /' || fail "CSE 로컬 DNS 리졸버 조회 실패"
+    echo -e "  ${CYAN}[DNS - dig @127.0.0.5 (CSE 로컬 리졸버): $HOST]${NC}"
+    dig @127.0.0.5 "$HOST" 2>/dev/null | sed 's/^/  /' || fail "CSE 로컬 DNS 리졸버 조회 실패"
 
     # TCP 포트 테스트
-    if [[ -n "$TARGET_PORT" ]]; then
+    if [[ -n "$PORT" ]]; then
         echo ""
-        echo -e "  ${CYAN}[TCP 포트 테스트: $TARGET_HOST:$TARGET_PORT]${NC}"
-        if nc -z -w 5 "$TARGET_HOST" "$TARGET_PORT" 2>/dev/null; then
-            pass "포트 $TARGET_PORT 연결 성공"
+        echo -e "  ${CYAN}[TCP 포트: $HOST:$PORT]${NC}"
+        if nc -z -w 5 "$HOST" "$PORT" 2>/dev/null; then
+            pass "포트 $PORT 연결 성공"
         else
-            fail "포트 $TARGET_PORT 연결 실패"
+            fail "포트 $PORT 연결 실패"
         fi
     fi
 
     # HTTP 연결 테스트
     echo ""
-    echo -e "  ${CYAN}[HTTP 연결 테스트: http://$TARGET_HOST]${NC}"
-    curl -v --connect-timeout 5 "http://$TARGET_HOST" 2>&1 | tail -20 | sed 's/^/  /' || true
+    echo -e "  ${CYAN}[HTTP: http://$HOST]${NC}"
+    curl -v --connect-timeout 5 "http://$HOST" 2>&1 | tail -20 | sed 's/^/  /' || true
 
     echo ""
-    echo -e "  ${CYAN}[HTTPS 연결 테스트: https://$TARGET_HOST]${NC}"
-    curl -v --connect-timeout 5 "https://$TARGET_HOST" 2>&1 | tail -20 | sed 's/^/  /' || true
+    echo -e "  ${CYAN}[HTTPS: https://$HOST]${NC}"
+    curl -v --connect-timeout 5 "https://$HOST" 2>&1 | tail -20 | sed 's/^/  /' || true
 
     echo ""
-    echo -e "  ${CYAN}[HTTPS 응답 요약: https://$TARGET_HOST]${NC}"
-    CURL_RESULT=$(curl -s --connect-timeout 10 -o /dev/null -w "HTTP %{http_code} | connect: %{time_connect}s | total: %{time_total}s" "https://$TARGET_HOST" 2>/dev/null || true)
+    echo -e "  ${CYAN}[HTTPS 응답 요약: https://$HOST]${NC}"
+    CURL_RESULT=$(curl -s --connect-timeout 10 -o /dev/null -w "HTTP %{http_code} | connect: %{time_connect}s | total: %{time_total}s" "https://$HOST" 2>/dev/null || true)
     if [[ -n "$CURL_RESULT" ]]; then
         echo -e "  $CURL_RESULT"
         if echo "$CURL_RESULT" | grep -q "HTTP 0"; then
@@ -225,9 +234,20 @@ if [[ -n "$TARGET_HOST" ]]; then
     else
         fail "curl 실행 실패"
     fi
-else
-    echo "  인자 없음 - 서버 테스트 건너뛰기"
-    echo "  사용법: curl -sL <URL> | sudo bash -s -- <서버IP또는도메인> [포트]"
+}
+
+# --------------------------------------------------
+print_header "6단계: 서버 연결 테스트"
+# --------------------------------------------------
+
+# 기본 도메인 테스트
+for HOST in "${DEFAULT_HOSTS[@]}"; do
+    test_server "$HOST"
+done
+
+# 추가 서버 테스트 (인자로 전달된 경우)
+if [[ -n "$EXTRA_HOST" ]]; then
+    test_server "$EXTRA_HOST" "$EXTRA_PORT"
 fi
 
 # --------------------------------------------------

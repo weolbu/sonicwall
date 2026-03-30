@@ -1,9 +1,9 @@
 # SonicWall CSE Service Tunnel - Windows Diagnostic & Fix Script
 #
 # Usage:
-#   irm <URL> | iex                                              # 기본 진단만
-#   & ([scriptblock]::Create((irm <URL>))) "10.0.1.50"           # 특정 서버 테스트
-#   & ([scriptblock]::Create((irm <URL>))) "10.0.1.50" "8080"    # 서버 + 포트 테스트
+#   irm <URL> | iex                                              # 기본 도메인 진단
+#   & ([scriptblock]::Create((irm <URL>))) "10.0.1.50"           # 기본 + 추가 서버 테스트
+#   & ([scriptblock]::Create((irm <URL>))) "10.0.1.50" "8080"    # 기본 + 추가 서버:포트 테스트
 #
 # 또는 로컬 실행:
 #   Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -12,9 +12,11 @@
 #Requires -RunAsAdministrator
 
 param(
-    [string]$TargetHost = "",
-    [string]$TargetPort = ""
+    [string]$ExtraHost = "",
+    [string]$ExtraPort = ""
 )
+
+$DefaultHosts = @("weolbu.com", "admin.weolbu.com", "redash.weolbu.com")
 
 $ErrorActionPreference = "Continue"
 
@@ -219,34 +221,43 @@ try {
 }
 
 # --------------------------------------------------
-Print-Header "6단계: 특정 서버 연결 테스트"
+# 서버 테스트 함수
 # --------------------------------------------------
-if (![string]::IsNullOrWhiteSpace($TargetHost)) {
-    Write-Host ""
-    Write-Host "  [Ping 테스트: $TargetHost]" -ForegroundColor Cyan
-    $pingResult = Test-Connection -ComputerName $TargetHost -Count 3 -Quiet -ErrorAction SilentlyContinue
-    if ($pingResult) {
-        Pass "Ping 성공"
-    } else {
-        Fail "Ping 실패"
-    }
+function Test-Server {
+    param(
+        [string]$Host_,
+        [string]$Port_ = ""
+    )
 
-    # DNS 조회 (nslookup)
     Write-Host ""
-    Write-Host "  [DNS 조회 - nslookup: $TargetHost]" -ForegroundColor Cyan
+    Write-Host "  ----------------------------------------" -ForegroundColor Cyan
+    $label = $Host_
+    if (![string]::IsNullOrWhiteSpace($Port_)) { $label += ":$Port_" }
+    Write-Host "  대상: $label" -ForegroundColor Cyan
+    Write-Host "  ----------------------------------------" -ForegroundColor Cyan
+
+    # Ping
+    Write-Host ""
+    Write-Host "  [Ping: $Host_]" -ForegroundColor Cyan
+    $pingResult = Test-Connection -ComputerName $Host_ -Count 3 -Quiet -ErrorAction SilentlyContinue
+    if ($pingResult) { Pass "Ping 성공" } else { Fail "Ping 실패" }
+
+    # DNS (nslookup)
+    Write-Host ""
+    Write-Host "  [DNS - nslookup: $Host_]" -ForegroundColor Cyan
     try {
-        $nslookup = nslookup $TargetHost 2>&1 | Out-String
+        $nslookup = nslookup $Host_ 2>&1 | Out-String
         $nslookup -split "`n" | ForEach-Object { Write-Host "  $_" }
         Pass "nslookup 조회 완료"
     } catch {
         Fail "nslookup 조회 실패"
     }
 
-    # DNS 조회 (Resolve-DnsName)
+    # DNS (Resolve-DnsName)
     Write-Host ""
-    Write-Host "  [DNS 조회 - Resolve-DnsName: $TargetHost]" -ForegroundColor Cyan
+    Write-Host "  [DNS - Resolve-DnsName: $Host_]" -ForegroundColor Cyan
     try {
-        $dns = Resolve-DnsName -Name $TargetHost -ErrorAction Stop
+        $dns = Resolve-DnsName -Name $Host_ -ErrorAction Stop
         Pass "DNS 조회 성공"
         $dns | Format-Table -Property Name, Type, IPAddress -AutoSize |
             Out-String | ForEach-Object { $_ -split "`n" } |
@@ -255,49 +266,51 @@ if (![string]::IsNullOrWhiteSpace($TargetHost)) {
         Fail "DNS 조회 실패 - DNS 설정을 확인하세요"
     }
 
-    # TCP 포트 테스트
-    if (![string]::IsNullOrWhiteSpace($TargetPort)) {
+    # TCP 포트
+    if (![string]::IsNullOrWhiteSpace($Port_)) {
         Write-Host ""
-        Write-Host "  [TCP 포트 테스트: ${TargetHost}:${TargetPort}]" -ForegroundColor Cyan
+        Write-Host "  [TCP 포트: ${Host_}:${Port_}]" -ForegroundColor Cyan
         $tcp = New-Object System.Net.Sockets.TcpClient
         try {
-            $asyncResult = $tcp.BeginConnect($TargetHost, [int]$TargetPort, $null, $null)
+            $asyncResult = $tcp.BeginConnect($Host_, [int]$Port_, $null, $null)
             $wait = $asyncResult.AsyncWaitHandle.WaitOne(5000, $false)
             if ($wait -and $tcp.Connected) {
-                Pass "포트 $TargetPort 연결 성공"
+                Pass "포트 $Port_ 연결 성공"
             } else {
-                Fail "포트 $TargetPort 연결 실패 (5초 타임아웃)"
+                Fail "포트 $Port_ 연결 실패 (5초 타임아웃)"
             }
         } catch {
-            Fail "포트 $TargetPort 연결 실패: $_"
+            Fail "포트 $Port_ 연결 실패: $_"
         } finally {
             $tcp.Close()
         }
     }
 
-    # HTTP 연결 테스트
+    # HTTP
     Write-Host ""
-    Write-Host "  [HTTP 연결 테스트: http://$TargetHost]" -ForegroundColor Cyan
+    Write-Host "  [HTTP: http://$Host_]" -ForegroundColor Cyan
     try {
-        $httpResult = curl.exe -v --connect-timeout 5 "http://$TargetHost" 2>&1 | Out-String
+        $httpResult = curl.exe -v --connect-timeout 5 "http://$Host_" 2>&1 | Out-String
         $httpResult -split "`n" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
     } catch {
         Fail "HTTP 연결 실패"
     }
 
+    # HTTPS
     Write-Host ""
-    Write-Host "  [HTTPS 연결 테스트: https://$TargetHost]" -ForegroundColor Cyan
+    Write-Host "  [HTTPS: https://$Host_]" -ForegroundColor Cyan
     try {
-        $httpsResult = curl.exe -v --connect-timeout 5 "https://$TargetHost" 2>&1 | Out-String
+        $httpsResult = curl.exe -v --connect-timeout 5 "https://$Host_" 2>&1 | Out-String
         $httpsResult -split "`n" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
     } catch {
         Fail "HTTPS 연결 실패"
     }
 
+    # HTTPS 응답 요약
     Write-Host ""
-    Write-Host "  [HTTPS 응답 요약: https://$TargetHost]" -ForegroundColor Cyan
+    Write-Host "  [HTTPS 응답 요약: https://$Host_]" -ForegroundColor Cyan
     try {
-        $curlSummary = curl.exe -s --connect-timeout 10 -o NUL -w "%{http_code} %{time_connect} %{time_total}" "https://$TargetHost" 2>&1 | Out-String
+        $curlSummary = curl.exe -s --connect-timeout 10 -o NUL -w "%{http_code} %{time_connect} %{time_total}" "https://$Host_" 2>&1 | Out-String
         $curlSummary = $curlSummary.Trim()
         Write-Host "  HTTP $curlSummary"
         if ($curlSummary -match "^0") {
@@ -308,9 +321,20 @@ if (![string]::IsNullOrWhiteSpace($TargetHost)) {
     } catch {
         Fail "curl 실행 실패"
     }
-} else {
-    Write-Host "  인자 없음 - 서버 테스트 건너뛰기"
-    Write-Host "  사용법: .\sonicwall-diag-win.ps1 <서버IP또는도메인> [포트]"
+}
+
+# --------------------------------------------------
+Print-Header "6단계: 서버 연결 테스트"
+# --------------------------------------------------
+
+# 기본 도메인 테스트
+foreach ($h in $DefaultHosts) {
+    Test-Server -Host_ $h
+}
+
+# 추가 서버 테스트 (인자로 전달된 경우)
+if (![string]::IsNullOrWhiteSpace($ExtraHost)) {
+    Test-Server -Host_ $ExtraHost -Port_ $ExtraPort
 }
 
 # --------------------------------------------------
